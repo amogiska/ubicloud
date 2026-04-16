@@ -113,6 +113,8 @@ class Prog::Postgres::PostgresResourceNexus < Prog::Base
   end
 
   label def start
+    postgres_resource.setup_log_aggregation
+
     nap 5 unless representative_server.vm.strand.label == "wait"
 
     postgres_resource.incr_initial_provisioning
@@ -324,6 +326,13 @@ class Prog::Postgres::PostgresResourceNexus < Prog::Base
       )
 
       postgres_resource.internal_firewall.destroy
+
+      if postgres_resource.parseable_password &&
+          (client = ParseableResource.client_for_project(Config.postgres_service_project_id))
+        client.delete_stream(stream_name: postgres_resource.ubid)
+        client.delete_user(user_id: postgres_resource.ubid)
+        client.delete_role(role_name: postgres_resource.ubid)
+      end
 
       servers.each(&:incr_destroy)
 
