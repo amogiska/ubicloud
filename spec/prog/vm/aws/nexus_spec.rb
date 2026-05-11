@@ -747,6 +747,14 @@ usermod -L ubuntu
       nx.incr_update_firewall_rules
       expect { nx.wait }.to hop("update_firewall_rules")
     end
+
+    it "hops to restart when restart semaphore set" do
+      vm.incr_restart
+      expect { nx.wait }.to hop("restart")
+      frame = st.stack[0]
+      expect(frame["deadline_target"]).to eq "wait"
+      expect(Time.parse(frame["deadline_at"])).to be_within(10).of(Time.now + 300)
+    end
   end
 
   describe "#update_firewall_rules" do
@@ -760,6 +768,16 @@ usermod -L ubuntu
     it "hops to wait if firewall rules are applied" do
       expect(nx).to receive(:retval).and_return({"msg" => "firewall rule is added"})
       expect { nx.update_firewall_rules }.to hop("wait")
+    end
+  end
+
+  describe "#restart" do
+    it "reboots the EC2 instance, decrements restart, and hops to wait" do
+      aws_instance
+      vm.incr_restart
+      expect(client).to receive(:reboot_instances).with({instance_ids: ["i-0123456789abcdefg"]})
+      expect { nx.restart }.to hop("wait")
+        .and change { vm.reload.restart_set? }.from(true).to(false)
     end
   end
 
@@ -893,6 +911,19 @@ usermod -L ubuntu
           a_hash_including(operation_name: :delete_instance_profile, params: {instance_profile_name: "testvm-instance-profile"}),
           a_hash_including(operation_name: :delete_role, params: {role_name: "testvm"}),
         ))
+    end
+  end
+
+  describe "restart end-to-end" do
+    it "drives wait -> restart -> wait when incr_restart fires on a wait-state strand" do
+      aws_instance
+      st.update(label: "wait")
+      vm.incr_restart
+      expect(client).to receive(:reboot_instances).with({instance_ids: ["i-0123456789abcdefg"]}).and_return(nil)
+
+      st.run(5)
+      expect(st.reload.label).to eq("wait")
+      expect(vm.reload.restart_set?).to be(false)
     end
   end
 end
