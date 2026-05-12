@@ -973,10 +973,10 @@ RSpec.describe Prog::Vm::Gcp::Nexus do
 
   describe "restart end-to-end" do
     before do
-      allow_any_instance_of(LocationCredentialGcp).to receive_messages(
-        compute_client:,
-        zone_operations_client: zone_ops_client,
-      )
+      # Stub at the GCP client class level (not the credential instance) so the
+      # same test double survives the strand reloading the prog between hops.
+      allow(Google::Cloud::Compute::V1::Instances::Rest::Client).to receive(:new).and_return(compute_client)
+      allow(Google::Cloud::Compute::V1::ZoneOperations::Rest::Client).to receive(:new).and_return(zone_ops_client)
       refresh_frame(nx, new_values: {"gcp_zone_suffix" => "a"})
       st.update(label: "wait")
     end
