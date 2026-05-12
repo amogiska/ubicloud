@@ -308,7 +308,23 @@ class Prog::Vm::Aws::Nexus < Prog::Base
   label def restart
     decr_restart
     client.reboot_instances(instance_ids: [vm.aws_instance.instance_id])
-    hop_wait
+    register_deadline("wait", 5 * 60)
+    hop_wait_restart_complete
+  end
+
+  label def wait_restart_complete
+    resp = client.describe_instance_status(
+      instance_ids: [vm.aws_instance.instance_id],
+      include_all_instances: true,
+    )
+    status = resp.instance_statuses.first
+    if status &&
+        status.instance_status&.status == "ok" &&
+        status.system_status&.status == "ok"
+      decr_checkup
+      hop_wait
+    end
+    nap 5
   end
 
   label def prevent_destroy

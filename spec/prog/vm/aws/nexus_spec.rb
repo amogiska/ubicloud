@@ -772,12 +772,77 @@ usermod -L ubuntu
   end
 
   describe "#restart" do
-    it "reboots the EC2 instance, decrements restart, and hops to wait" do
+    it "reboots the EC2 instance, decrements restart, registers deadline, and hops to wait_restart_complete" do
       aws_instance
       vm.incr_restart
       expect(client).to receive(:reboot_instances).with({instance_ids: ["i-0123456789abcdefg"]})
-      expect { nx.restart }.to hop("wait")
+      expect { nx.restart }.to hop("wait_restart_complete")
         .and change { vm.reload.restart_set? }.from(true).to(false)
+      frame = st.stack[0]
+      expect(frame["deadline_target"]).to eq "wait"
+      expect(Time.parse(frame["deadline_at"])).to be_within(10).of(Time.now + 5 * 60)
+    end
+  end
+
+  describe "#wait_restart_complete" do
+    before { aws_instance }
+
+    def stub_status(instance_status:, system_status:)
+      client.stub_responses(:describe_instance_status, instance_statuses: [{
+        instance_id: "i-0123456789abcdefg",
+        instance_status: {status: instance_status},
+        system_status: {status: system_status},
+      }])
+    end
+
+    it "decrements checkup and hops to wait when both health checks are ok" do
+      vm.incr_checkup
+      stub_status(instance_status: "ok", system_status: "ok")
+      expect(client).to receive(:describe_instance_status).with({
+        instance_ids: ["i-0123456789abcdefg"],
+        include_all_instances: true,
+      }).and_call_original
+      expect { nx.wait_restart_complete }.to hop("wait")
+        .and change { vm.reload.checkup_set? }.from(true).to(false)
+    end
+
+    it "naps without decrementing checkup when instance_status is still initializing" do
+      vm.incr_checkup
+      stub_status(instance_status: "initializing", system_status: "ok")
+      expect { nx.wait_restart_complete }.to nap(5)
+      expect(vm.reload.checkup_set?).to be(true)
+    end
+
+    it "naps without decrementing checkup when system_status is still initializing" do
+      vm.incr_checkup
+      stub_status(instance_status: "ok", system_status: "initializing")
+      expect { nx.wait_restart_complete }.to nap(5)
+      expect(vm.reload.checkup_set?).to be(true)
+    end
+
+    it "naps when describe_instance_status returns no status entries (brief post-reboot window)" do
+      vm.incr_checkup
+      client.stub_responses(:describe_instance_status, instance_statuses: [])
+      expect { nx.wait_restart_complete }.to nap(5)
+      expect(vm.reload.checkup_set?).to be(true)
+    end
+
+    it "naps when instance_status sub-object is nil (brief post-reboot window)" do
+      client.stub_responses(:describe_instance_status, instance_statuses: [{
+        instance_id: "i-0123456789abcdefg",
+        instance_status: nil,
+        system_status: {status: "ok"},
+      }])
+      expect { nx.wait_restart_complete }.to nap(5)
+    end
+
+    it "naps when system_status sub-object is nil (brief post-reboot window)" do
+      client.stub_responses(:describe_instance_status, instance_statuses: [{
+        instance_id: "i-0123456789abcdefg",
+        instance_status: {status: "ok"},
+        system_status: nil,
+      }])
+      expect { nx.wait_restart_complete }.to nap(5)
     end
   end
 
@@ -915,15 +980,32 @@ usermod -L ubuntu
   end
 
   describe "restart end-to-end" do
-    it "drives wait -> restart -> wait when incr_restart fires on a wait-state strand" do
+    it "drives wait -> restart -> wait_restart_complete -> wait when status checks pass on the second poll" do
       aws_instance
       st.update(label: "wait")
       vm.incr_restart
+      vm.incr_checkup
       expect(client).to receive(:reboot_instances).with({instance_ids: ["i-0123456789abcdefg"]}).and_return(nil)
+      not_ok = client.stub_data(:describe_instance_status, instance_statuses: [{
+        instance_id: "i-0123456789abcdefg",
+        instance_status: {status: "initializing"},
+        system_status: {status: "ok"},
+      }])
+      ok = client.stub_data(:describe_instance_status, instance_statuses: [{
+        instance_id: "i-0123456789abcdefg",
+        instance_status: {status: "ok"},
+        system_status: {status: "ok"},
+      }])
+      client.stub_responses(:describe_instance_status, not_ok, ok)
+
+      st.run(5)
+      expect(st.reload.label).to eq("wait_restart_complete")
+      expect(vm.reload.checkup_set?).to be(true)
 
       st.run(5)
       expect(st.reload.label).to eq("wait")
       expect(vm.reload.restart_set?).to be(false)
+      expect(vm.reload.checkup_set?).to be(false)
     end
   end
 end

@@ -37,6 +37,11 @@ RSpec.describe Vm do
       expect(vm.display_state).to eq("restarting")
     end
 
+    it "returns restarting if at wait_restart_complete label" do
+      vm.strand.update(label: "wait_restart_complete")
+      expect(vm.display_state).to eq("restarting")
+    end
+
     it "returns starting if start semaphore increased" do
       vm.incr_start
       expect(vm.display_state).to eq("starting")
