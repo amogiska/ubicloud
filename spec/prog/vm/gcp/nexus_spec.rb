@@ -781,16 +781,20 @@ RSpec.describe Prog::Vm::Gcp::Nexus do
       refresh_frame(nx, new_values: {"restart" => {"name" => "op-restart-123", "scope" => "zone", "scope_value" => "us-central1-a"}})
     end
 
-    it "naps when the operation is still running" do
+    it "naps without decrementing checkup when the operation is still running" do
+      nx.incr_checkup
       op = Google::Cloud::Compute::V1::Operation.new(status: :RUNNING)
       expect(zone_ops_client).to receive(:get).and_return(op)
       expect { nx.wait_restart_op }.to nap(5)
+      expect(vm.reload.checkup_set?).to be(true)
     end
 
-    it "clears the LRO and hops to wait when the operation completes successfully" do
+    it "clears the LRO, decrements checkup, and hops to wait when the operation completes successfully" do
+      nx.incr_checkup
       op = Google::Cloud::Compute::V1::Operation.new(status: :DONE)
       expect(zone_ops_client).to receive(:get).and_return(op)
       expect { nx.wait_restart_op }.to hop("wait")
+        .and change { vm.reload.checkup_set? }.from(true).to(false)
       expect(st.reload.stack.first["restart"]).to be_nil
     end
 
@@ -979,6 +983,7 @@ RSpec.describe Prog::Vm::Gcp::Nexus do
 
     it "drives wait -> restart -> wait_restart_op -> wait when the LRO completes" do
       vm.incr_restart
+      vm.incr_checkup
       op = instance_double(Gapic::GenericLRO::Operation, name: "op-restart-e2e")
       expect(compute_client).to receive(:reset).with(
         project: "test-gcp-project",
@@ -991,6 +996,7 @@ RSpec.describe Prog::Vm::Gcp::Nexus do
       st.run(5)
       expect(st.reload.label).to eq("wait")
       expect(vm.reload.restart_set?).to be(false)
+      expect(vm.reload.checkup_set?).to be(false)
       expect(st.stack.first["restart"]).to be_nil
     end
   end

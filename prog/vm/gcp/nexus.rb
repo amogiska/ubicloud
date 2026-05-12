@@ -256,9 +256,16 @@ class Prog::Vm::Gcp::Nexus < Prog::Base
   end
 
   label def wait_restart_op
+    # GCE reset is a hard reset of a RUNNING instance: the API instance.status
+    # never leaves RUNNING, so the LRO is the only readiness signal. The LRO
+    # sits in PENDING/RUNNING for the entire OS-boot window and only flips to
+    # DONE after the guest is back -- empirically 12-26s after ssh resumes,
+    # not at API-acknowledge time. decr_checkup here is therefore safe once
+    # an unavailable transition lands.
     poll_and_clear_gcp_op("restart") do |op|
       raise "GCE reset of #{vm.name} failed: #{op_error_message(op)}"
     end
+    decr_checkup
     hop_wait
   end
 
