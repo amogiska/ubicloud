@@ -27,7 +27,23 @@ class Prog::Test::PostgresResource < Prog::Test::PostgresBase
       update_stack({"fail_message" => "Failed to run test queries"})
     end
 
-    hop_destroy
+    hop_test_vm_restart
+  end
+
+  label def test_vm_restart
+    vm = representative_server.vm
+    unless frame["restart_triggered"]
+      vm.incr_restart
+      update_stack({"restart_triggered" => true})
+      nap 5
+    end
+
+    if vm.strand.reload.label == "wait" &&
+        representative_server.run_query("SELECT 1") == "1"
+      hop_destroy
+    end
+
+    nap 5
   end
 
   label def destroy_postgres
