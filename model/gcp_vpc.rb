@@ -26,7 +26,7 @@ end
 #  gcp_vpc_dedicated_for_subnet_id_uidx       | UNIQUE btree (dedicated_for_subnet_id) WHERE dedicated_for_subnet_id IS NOT NULL
 #  gcp_vpc_project_id_location_id_shared_uidx | UNIQUE btree (project_id, location_id) WHERE dedicated_for_subnet_id IS NULL
 # Foreign key constraints:
-#  gcp_vpc_dedicated_for_subnet_id_fkey | (dedicated_for_subnet_id) REFERENCES private_subnet(id) ON DELETE CASCADE
+#  gcp_vpc_dedicated_for_subnet_id_fkey | (dedicated_for_subnet_id) REFERENCES private_subnet(id)
 #  gcp_vpc_location_id_fkey             | (location_id) REFERENCES location(id)
 #  gcp_vpc_project_id_fkey              | (project_id) REFERENCES project(id)
 # Referenced By:

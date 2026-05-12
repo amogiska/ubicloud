@@ -7,7 +7,7 @@ Sequel.migration do
     end
 
     alter_table(:gcp_vpc) do
-      add_foreign_key :dedicated_for_subnet_id, :private_subnet, type: :uuid, on_delete: :cascade
+      add_foreign_key :dedicated_for_subnet_id, :private_subnet, type: :uuid
     end
   end
 end
