@@ -34,16 +34,26 @@ class Prog::Test::PostgresResource < Prog::Test::PostgresBase
     vm = representative_server.vm
     unless frame["restart_triggered"]
       vm.incr_restart
-      update_stack({"restart_triggered" => true})
+      update_stack({"restart_triggered" => true, "restart_deadline" => Time.now.to_i + 5 * 60})
       nap 5
     end
 
-    if vm.strand.reload.label == "wait" &&
-        representative_server.run_query("SELECT 1") == "1"
+    if Time.now.to_i >= frame["restart_deadline"]
+      update_stack({"fail_message" => "VM did not recover from restart within 5 minutes"})
+      hop_destroy
+    end
+
+    if vm.strand.reload.label == "wait" && postgres_responds?
       hop_destroy
     end
 
     nap 5
+  end
+
+  def postgres_responds?
+    representative_server.run_query("SELECT 1") == "1"
+  rescue *Sshable::SSH_CONNECTION_ERRORS, Sshable::SshTimeout
+    false
   end
 
   label def destroy_postgres

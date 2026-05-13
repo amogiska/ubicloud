@@ -178,31 +178,69 @@ RSpec.describe Prog::Test::PostgresResource do
     let(:vm) { pgr_test.representative_server.vm }
     let(:sshable) { vm.sshable }
 
-    it "triggers vm restart on first entry and naps" do
+    it "triggers vm restart on first entry, stores a 5-minute deadline, and naps" do
+      now = Time.now
+      expect(Time).to receive(:now).at_least(:once).and_return(now)
       expect { pgr_test.test_vm_restart }.to nap(5)
       expect(Semaphore.where(strand_id: vm.id, name: "restart").count).to eq(1)
       expect(frame_value(pgr_test, "restart_triggered")).to be(true)
+      expect(frame_value(pgr_test, "restart_deadline")).to eq(now.to_i + 5 * 60)
     end
 
     it "naps when the vm strand has not returned to wait yet" do
-      refresh_frame(pgr_test, new_values: {"restart_triggered" => true})
+      refresh_frame(pgr_test, new_values: {"restart_triggered" => true, "restart_deadline" => Time.now.to_i + 5 * 60})
       vm.strand.update(label: "restart")
       expect { pgr_test.test_vm_restart }.to nap(5)
       expect(Semaphore.where(strand_id: vm.id, name: "restart").count).to eq(0)
     end
 
-    it "naps when the vm strand is back to wait but Postgres is not reachable" do
-      refresh_frame(pgr_test, new_values: {"restart_triggered" => true})
+    it "naps when the vm strand is back to wait but Postgres returns the wrong result" do
+      refresh_frame(pgr_test, new_values: {"restart_triggered" => true, "restart_deadline" => Time.now.to_i + 5 * 60})
       vm.strand.update(label: "wait")
       expect(sshable).to receive(:_cmd).and_return("\n")
       expect { pgr_test.test_vm_restart }.to nap(5)
     end
 
     it "hops to destroy when the vm strand is back to wait and Postgres responds" do
-      refresh_frame(pgr_test, new_values: {"restart_triggered" => true})
+      refresh_frame(pgr_test, new_values: {"restart_triggered" => true, "restart_deadline" => Time.now.to_i + 5 * 60})
       vm.strand.update(label: "wait")
       expect(sshable).to receive(:_cmd).and_return("1\n")
       expect { pgr_test.test_vm_restart }.to hop("destroy")
+    end
+
+    it "naps when SSH refuses the connection while the VM is rebooting" do
+      refresh_frame(pgr_test, new_values: {"restart_triggered" => true, "restart_deadline" => Time.now.to_i + 5 * 60})
+      vm.strand.update(label: "wait")
+      expect(sshable).to receive(:_cmd).and_raise(Errno::ECONNREFUSED.new("connection refused"))
+      expect { pgr_test.test_vm_restart }.to nap(5)
+      expect(frame_value(pgr_test, "fail_message")).to be_nil
+    end
+
+    it "naps when SSH disconnects mid-handshake while the VM is rebooting" do
+      refresh_frame(pgr_test, new_values: {"restart_triggered" => true, "restart_deadline" => Time.now.to_i + 5 * 60})
+      vm.strand.update(label: "wait")
+      expect(sshable).to receive(:_cmd).and_raise(Net::SSH::Disconnect)
+      expect { pgr_test.test_vm_restart }.to nap(5)
+    end
+
+    it "naps when the SSH connect times out while the VM is rebooting" do
+      refresh_frame(pgr_test, new_values: {"restart_triggered" => true, "restart_deadline" => Time.now.to_i + 5 * 60})
+      vm.strand.update(label: "wait")
+      expect(sshable).to receive(:_cmd).and_raise(Net::SSH::ConnectionTimeout)
+      expect { pgr_test.test_vm_restart }.to nap(5)
+    end
+
+    it "naps when the SSH command itself times out while the VM is rebooting" do
+      refresh_frame(pgr_test, new_values: {"restart_triggered" => true, "restart_deadline" => Time.now.to_i + 5 * 60})
+      vm.strand.update(label: "wait")
+      expect(sshable).to receive(:_cmd).and_raise(Sshable::SshTimeout.new("psql", "", "", nil, nil))
+      expect { pgr_test.test_vm_restart }.to nap(5)
+    end
+
+    it "hops to destroy with a fail_message when the restart deadline is exceeded" do
+      refresh_frame(pgr_test, new_values: {"restart_triggered" => true, "restart_deadline" => Time.now.to_i - 1})
+      expect { pgr_test.test_vm_restart }.to hop("destroy")
+      expect(frame_value(pgr_test, "fail_message")).to eq("VM did not recover from restart within 5 minutes")
     end
 
     it "still runs the restart test when a prior fail_message is set" do

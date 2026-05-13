@@ -308,23 +308,36 @@ class Prog::Vm::Aws::Nexus < Prog::Base
   label def restart
     decr_restart
     client.reboot_instances(instance_ids: [vm.aws_instance.instance_id])
-    register_deadline("wait", 5 * 60)
+    register_deadline("wait", 10 * 60)
+    # AWS's reboot_instances returns the moment the request is accepted;
+    # the soft reboot has not yet started. Park a grace marker so the
+    # next label does not observe pre-reboot health.
+    update_stack({"restart_grace_until" => Time.now.to_i + 60})
     hop_wait_restart_complete
   end
 
   label def wait_restart_complete
+    nap 5 if Time.now.to_i < frame["restart_grace_until"]
+
     resp = client.describe_instance_status(
       instance_ids: [vm.aws_instance.instance_id],
       include_all_instances: true,
     )
     status = resp.instance_statuses.first
-    if status &&
+    unless status &&
         status.instance_status&.status == "ok" &&
         status.system_status&.status == "ok"
-      decr_checkup
-      hop_wait
+      nap 5
     end
-    nap 5
+
+    begin
+      vm.sshable.cmd("true", timeout: 5)
+    rescue *Sshable::SSH_CONNECTION_ERRORS, Sshable::SshTimeout
+      nap 5
+    end
+
+    decr_checkup
+    hop_wait
   end
 
   label def prevent_destroy
